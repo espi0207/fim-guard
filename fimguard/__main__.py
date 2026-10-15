@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import stat
@@ -59,7 +60,8 @@ def _auto_excludes(directory: Path, baseline_path: Path) -> list[str]:
         rel = baseline_path.resolve().relative_to(directory.resolve()).as_posix()
     except ValueError:
         return []
-    return [rel, ".fimguard-*.tmp"]
+    # glob.escape: un nombre como "base[1].json" se tomaría como patrón y no se excluiría.
+    return [glob.escape(rel), ".fimguard-*.tmp"]
 
 
 def _warn(text: str) -> None:
@@ -179,9 +181,22 @@ def main(argv: list[str] | None = None) -> int:
         if changes:
             print_changes(changes)
             print()
-        if not _save(args, result.records, excludes, key):
+        # Lo que no se ha podido leer se queda como estaba. Si se quitara de la línea base, un
+        # cambio hecho mientras tanto saldría luego como "añadido" y no como "modificado".
+        records = dict(result.records)
+        kept = [
+            p
+            for p in baseline_records
+            if p not in records and (p in result.errors or any(p.startswith(d + "/") for d in result.errors))
+        ]
+        for p in kept:
+            records[p] = baseline_records[p]
+        if kept:
+            _warn(f"{len(kept)} entrada(s) que no se pudieron leer se quedan como estaban en la línea base")
+        if not _save(args, records, excludes, key):
             return EXIT_ERROR
-        print(f"línea base actualizada ({len(changes)} cambio(s) aceptados): {_summary(result.records)}")
+        accepted = sum(c.kind != "unreadable" for c in changes)
+        print(f"línea base actualizada ({accepted} cambio(s) aceptados): {_summary(records)}")
         return EXIT_OK
 
     if args.json:
