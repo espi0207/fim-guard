@@ -73,6 +73,9 @@ fimguard update /var/www -b baseline.json -k ~/fimguard.key  # después de un de
   patrones se guardan dentro de la línea base firmada, así que nadie puede añadir
   exclusiones después para esconder algo.
 - `update` imprime la lista de cambios que acepta, para que quede constancia.
+- La propia carpeta vigilada también se guarda (como `.`): un `chmod 777` o un cambio de
+  dueño sobre ella sale en `check`. Una línea base hecha con una versión anterior no la
+  tiene; `check` lo avisa y basta un `update` para incluirla.
 - `init` no sobrescribe una línea base que ya existe, salvo con `--force`.
 - La clave también se puede pasar en la variable de entorno `FIMGUARD_KEY`.
 - `check --json` saca los cambios en JSON.
@@ -98,13 +101,16 @@ Con eso se puede lanzar desde cron y avisar solo si algo no va bien:
 |---|---|
 | Archivo nuevo con extensión que el servidor puede ejecutar (`.php`, `.phtml`, `.phar`, `.jsp`, `.aspx`...) | Es lo que deja un atacante que consigue subir archivos: una webshell. Se miran todas las extensiones, porque `foto.php.jpg` se ejecuta como PHP con algunas configuraciones de Apache |
 | Aparece el bit setuid o setgid | Un ejecutable setuid se ejecuta con los permisos de su dueño: es una forma clásica de escalar privilegios |
-| Archivo o carpeta que pasa a ser escribible por cualquiera | Cualquier usuario de la máquina podría cambiarlo |
+| Archivo o carpeta que pasa a ser escribible por cualquiera (también la propia carpeta vigilada, que sale como `.`) | Cualquier usuario de la máquina podría cambiarlo |
 | Un archivo que pasa a ser ejecutable | Un script que antes no se podía ejecutar y ahora sí |
 | Enlace simbólico que apunta fuera del directorio | Un enlace a `/etc/passwd` dentro de la web puede acabar sirviéndolo |
 | Nombre con caracteres de control o invisibles | Se usan para esconder archivos (ver abajo) |
 
 Si un archivo no se puede leer, sale como `ILEGIBLE` y no como eliminado: el archivo
-sigue ahí aunque no se pueda comprobar.
+sigue ahí aunque no se pueda comprobar. Si lo que no se puede leer es una carpeta (o la
+propia carpeta vigilada), lo de dentro tampoco sale como eliminado. Y `update` deja lo
+ilegible como estaba en la línea base, para que un cambio hecho mientras tanto siga
+saliendo como modificado.
 
 ## Algunas decisiones
 

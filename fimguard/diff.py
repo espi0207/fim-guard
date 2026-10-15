@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import posixpath
+import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
-from .scanner import FileRecord
+from .scanner import ROOT, FileRecord
 
 try:
     import grp
@@ -66,7 +67,8 @@ def link_escapes(link_path: str, target: str, root: str | None) -> bool:
     hubiera por el camino.
     """
     target = target.replace("\\", "/")
-    if target.startswith("/") or target[1:2] == ":":  # absoluta (o C:/ en Windows)
+    # Absoluta, o C:/ en Windows. "a:b" es un nombre relativo normal en Linux.
+    if target.startswith("/") or re.match(r"[A-Za-z]:(/|$)", target):
         if root is None:
             return True
         root = root.replace("\\", "/").rstrip("/")
@@ -101,8 +103,9 @@ def _describe(rec: FileRecord) -> str:
     return f"{rec.size} bytes"
 
 
-def _under_unreadable_dir(path: str, errors: dict[str, str]) -> bool:
-    return any(path.startswith(d + "/") for d in errors)
+def under_unreadable_dir(path: str, errors: dict[str, str]) -> bool:
+    """¿Está dentro de una carpeta que no se pudo leer? Si la ilegible es la raíz, lo está todo."""
+    return any(d == ROOT or path.startswith(d + "/") for d in errors)
 
 
 def compare(
@@ -124,7 +127,7 @@ def compare(
         old, new = baseline.get(path), current.get(path)
         if path in errors:
             changes.append(Change("unreadable", path, errors[path]))
-        elif new is None and _under_unreadable_dir(path, errors):
+        elif new is None and under_unreadable_dir(path, errors):
             continue  # su carpeta no se pudo leer y ya sale como ilegible
         elif old is None:
             changes.append(Change("added", path, _describe(new), _suspicious(None, new, path, root)))
