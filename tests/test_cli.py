@@ -221,3 +221,32 @@ def test_write_errors_are_reported_not_crashed(site, tmp_path, capsys):
     (tmp_path / "archivo.txt").write_text("")  # un archivo donde debería haber una carpeta
     assert run("init", root, "-b", tmp_path / "archivo.txt" / "baseline.json", "-k", key) == EXIT_ERROR
     assert "no se pudo guardar" in capsys.readouterr().err
+
+
+def test_baseline_with_glob_characters_excludes_itself(site):
+    root, _, key = site
+    baseline = root / "base[1].json"
+    assert run("init", root, "-b", baseline, "-k", key) == EXIT_OK
+    assert run("check", root, "-b", baseline, "-k", key) == EXIT_OK
+
+
+def test_update_keeps_unreadable_entries(site, monkeypatch, capsys):
+    from fimguard import scanner as sc
+
+    root, baseline, key = site
+    run("init", root, "-b", baseline, "-k", key)
+    real_hash = sc._hash_file
+
+    def no_permission(path, expected):
+        if path.name == "index.html":
+            raise PermissionError(13, "Permission denied")
+        return real_hash(path, expected)
+
+    monkeypatch.setattr(sc, "_hash_file", no_permission)
+    assert run("update", root, "-b", baseline, "-k", key) == EXIT_OK
+    assert "0 cambio(s) aceptados" in capsys.readouterr().out
+    monkeypatch.setattr(sc, "_hash_file", real_hash)
+    (root / "index.html").write_text("<h1>Hackeado</h1>")
+    capsys.readouterr()
+    assert run("check", root, "-b", baseline, "-k", key, "--json") == EXIT_CHANGES
+    assert [(c["kind"], c["path"]) for c in json.loads(capsys.readouterr().out)] == [("modified", "index.html")]
