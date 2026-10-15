@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 CHUNK = 1024 * 1024
+ROOT = "."  # nombre con el que se guarda la propia carpeta vigilada
 
 # No existen en Windows; ahí valen 0 y simplemente no se usan.
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
@@ -90,9 +91,15 @@ def scan(root: Path, excludes: list[str] | None = None) -> ScanResult:
     excludes = excludes or []
     root = root.resolve()
     result = ScanResult(records={}, errors={})
+    # La propia carpeta también se vigila, como ".": con un chmod 777 o un cambio de dueño
+    # sobre ella cualquiera podría crear o borrar archivos dentro.
+    try:
+        result.records[ROOT] = _record(root)
+    except OSError as exc:
+        result.errors[ROOT] = exc.strerror or str(exc)
 
     def on_error(exc: OSError) -> None:
-        rel = os.path.relpath(exc.filename, root).replace(os.sep, "/") if exc.filename else "?"
+        rel = os.path.relpath(exc.filename, root).replace(os.sep, "/") if exc.filename else ROOT
         result.errors[rel] = exc.strerror or str(exc)
 
     for dirpath, dirnames, filenames in os.walk(root, onerror=on_error):

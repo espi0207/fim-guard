@@ -27,7 +27,8 @@ def changes_by_path(before, after, **kw):
 
 def test_scan_hashes_files_and_records_dirs(root):
     records = scan(root).records
-    assert set(records) == {"index.html", "css", "css/style.css", "app.log"}
+    assert set(records) == {".", "index.html", "css", "css/style.css", "app.log"}
+    assert records["."].kind == "dir"  # la propia carpeta vigilada
     assert records["index.html"].sha256 == hashlib.sha256(b"<h1>Hola</h1>").hexdigest()
     assert records["css"].kind == "dir" and records["css"].sha256 is None
 
@@ -134,6 +135,9 @@ def test_invisible_characters_in_name_are_suspicious(root):
         ("link", "/var/www/html/img.png", False),  # absoluto pero dentro de la raíz
         ("link", "/etc/passwd", True),
         ("link", "/var/www-evil/x", True),  # empieza igual que la raíz pero no es ella
+        ("link", "a:b", False),  # en Linux es un nombre relativo, no una unidad de Windows
+        ("link", "C:/Windows/win.ini", True),
+        ("link", "C:\\Windows\\win.ini", True),
     ],
 )
 def test_link_escapes(link, target, escapes):
@@ -200,3 +204,26 @@ def test_hash_does_not_follow_a_symlink_swapped_in(tmp_path):
 def test_fifos_and_sockets_are_ignored(root):
     os.mkfifo(root / "tuberia")
     assert "tuberia" not in scan(root).records
+
+
+@posix_only
+def test_root_directory_permissions_are_watched(root):
+    before = scan(root).records
+    os.chmod(root, 0o777)
+    try:
+        changes = changes_by_path(before, scan(root).records)
+    finally:
+        os.chmod(root, 0o755)
+    assert changes["."].kind == "permissions"
+    assert changes["."].suspicious == ["escribible por cualquiera"]
+
+
+def test_unreadable_root_is_not_reported_as_removed():
+    before = {
+        ".": FileRecord("dir", 0o755, 0, 0),
+        "index.html": FileRecord("file", 0o644, 0, 0, 3, sha256="x"),
+        "css": FileRecord("dir", 0o755, 0, 0),
+    }
+    now = {".": FileRecord("dir", 0o755, 0, 0)}  # no se pudo listar la raíz
+    changes = compare(before, now, {".": "Permission denied"})
+    assert [(c.kind, c.path) for c in changes] == [("unreadable", ".")]

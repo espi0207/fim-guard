@@ -70,7 +70,8 @@ def run_demo() -> int:
 
         _step(1, "Una web recién desplegada")
         for rel, rec in sorted(scan(site).records.items()):
-            print(f"   {rel}{'/' if rec.kind == 'dir' else ''}")
+            if rel != ".":
+                print(f"   {rel}{'/' if rec.kind == 'dir' else ''}")
 
         _step(2, "Se toma la línea base y se firma con HMAC-SHA256")
         records = scan(site).records

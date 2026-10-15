@@ -12,8 +12,8 @@ from pathlib import Path
 
 from . import baseline as bl
 from .ansi import clean, paint
-from .diff import Change, compare
-from .scanner import scan
+from .diff import Change, compare, under_unreadable_dir
+from .scanner import O_BINARY, O_NOFOLLOW, ROOT, scan
 
 EXIT_OK, EXIT_CHANGES, EXIT_ERROR, EXIT_TAMPERED = 0, 1, 2, 3
 
@@ -90,8 +90,9 @@ def print_changes(changes: list[Change], out=None) -> None:
 
 
 def _summary(records) -> str:
-    dirs = sum(r.kind == "dir" for r in records.values())
-    files = len(records) - dirs
+    entries = [r for path, r in records.items() if path != ROOT]
+    dirs = sum(r.kind == "dir" for r in entries)
+    files = len(entries) - dirs
     return f"{files} archivo{'' if files == 1 else 's'} y {dirs} directorio{'' if dirs == 1 else 's'}"
 
 
@@ -110,16 +111,18 @@ def keygen(out: Path | None) -> int:
         print(key)
         return EXIT_OK
     try:
-        # exist_ok=False: si ya hay una clave ahí no la piso, que perderla deja inservibles
-        # todas las líneas base firmadas con ella.
-        out.touch(mode=0o600, exist_ok=False)
+        # O_EXCL: si ya hay una clave ahí no la piso, que perderla deja inservibles todas las
+        # líneas base firmadas con ella. Se escribe por el mismo descriptor, sin volver a abrir
+        # la ruta, para que nadie pueda cambiar el archivo por un enlace entre medias.
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW | O_BINARY, 0o600)
     except FileExistsError:
         print(f"error: {out} ya existe y no voy a sobrescribir una clave", file=sys.stderr)
         return EXIT_ERROR
     except OSError as exc:
         print(f"error: no se pudo crear {out}: {exc.strerror}", file=sys.stderr)
         return EXIT_ERROR
-    out.write_text(key + "\n", encoding="utf-8")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(key + "\n")
     print(f"clave guardada en {out}. Guárdala fuera de la máquina que vigilas.", file=sys.stderr)
     return EXIT_OK
 
@@ -166,6 +169,16 @@ def main(argv: list[str] | None = None) -> int:
         _warn(f"la línea base se hizo sobre {previous['root']} y estás comprobando {root}")
 
     result = scan(args.directory, excludes)
+    # Las líneas base de antes no guardaban la propia carpeta: se compara sin ella para que no
+    # salga como añadida, y update la incluye a partir de ahora.
+    compared = result.records
+    if args.command != "init" and ROOT not in baseline_records:
+        compared = {p: r for p, r in result.records.items() if p != ROOT}
+        if args.command == "check":
+            _warn(
+                "esta línea base no vigila los permisos de la propia carpeta (es de una versión anterior); "
+                "haz update para incluirlos"
+            )
 
     if args.command == "init":
         for path, err in result.errors.items():
@@ -175,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"línea base creada con {_summary(result.records)} en {args.baseline}")
         return EXIT_OK
 
-    changes = compare(baseline_records, result.records, result.errors, previous.get("root"))
+    changes = compare(baseline_records, compared, result.errors, previous.get("root"))
 
     if args.command == "update":
         if changes:
@@ -187,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         kept = [
             p
             for p in baseline_records
-            if p not in records and (p in result.errors or any(p.startswith(d + "/") for d in result.errors))
+            if p not in records and (p in result.errors or under_unreadable_dir(p, result.errors))
         ]
         for p in kept:
             records[p] = baseline_records[p]

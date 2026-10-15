@@ -250,3 +250,44 @@ def test_update_keeps_unreadable_entries(site, monkeypatch, capsys):
     capsys.readouterr()
     assert run("check", root, "-b", baseline, "-k", key, "--json") == EXIT_CHANGES
     assert [(c["kind"], c["path"]) for c in json.loads(capsys.readouterr().out)] == [("modified", "index.html")]
+
+
+def _resign_without_root(baseline, key_file):
+    """Simula una línea base de una versión anterior, que no guardaba la propia carpeta."""
+    key = bl.load_key(key_file)
+    payload = bl.load(baseline, key)
+    del payload["files"]["."]
+    bl.save(baseline, payload, key)
+
+
+def test_old_baseline_without_root_checks_clean_and_update_adds_it(site, capsys):
+    root, baseline, key = site
+    run("init", root, "-b", baseline, "-k", key)
+    _resign_without_root(baseline, key)
+    capsys.readouterr()
+    assert run("check", root, "-b", baseline, "-k", key) == EXIT_OK
+    assert "versión anterior" in capsys.readouterr().err
+    assert run("update", root, "-b", baseline, "-k", key) == EXIT_OK
+    assert "0 cambio(s) aceptados" in capsys.readouterr().out
+    assert "." in bl.load(baseline, bl.load_key(key))["files"]
+
+
+@posix_only
+def test_check_detects_root_made_world_writable(site, capsys):
+    root, baseline, key = site
+    run("init", root, "-b", baseline, "-k", key)
+    os.chmod(root, 0o777)
+    capsys.readouterr()
+    try:
+        assert run("check", root, "-b", baseline, "-k", key, "--json") == EXIT_CHANGES
+    finally:
+        os.chmod(root, 0o755)
+    [change] = json.loads(capsys.readouterr().out)
+    assert (change["kind"], change["path"]) == ("permissions", ".")
+    assert change["suspicious"] == ["escribible por cualquiera"]
+
+
+def test_summary_does_not_count_the_root(site, capsys):
+    root, baseline, key = site
+    run("init", root, "-b", baseline, "-k", key)
+    assert "3 archivos y 1 directorio" in capsys.readouterr().out
