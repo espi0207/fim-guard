@@ -71,7 +71,8 @@ fimguard update /var/www -b baseline.json -k ~/fimguard.key  # después de un de
 
 - `-e` excluye archivos o carpetas por patrón (logs, cachés, lo que cambie solo). Los
   patrones se guardan dentro de la línea base firmada, así que nadie puede añadir
-  exclusiones después para esconder algo.
+  exclusiones después para esconder algo. `*.log` vale para cualquier carpeta; si
+  empieza por `/` (`/cache/*`), solo para esa ruta desde la raíz.
 - `update` imprime la lista de cambios que acepta, para que quede constancia.
 - La propia carpeta vigilada también se guarda (como `.`): un `chmod 777` o un cambio de
   dueño sobre ella sale en `check`. Una línea base hecha con una versión anterior no la
@@ -133,7 +134,7 @@ saliendo como modificado.
   hacían fallar el `print`.
 - **La línea base se escribe de forma atómica** (archivo temporal, `fsync` y
   `os.replace`) y con permisos 600. Si está dentro del directorio vigilado, se excluye
-  a sí misma. `keygen` nunca sobrescribe una clave que ya existe.
+  a sí misma, pero solo en su ruta exacta: otro `baseline.json` en `uploads/` sí se vigila. `keygen` nunca sobrescribe una clave que ya existe.
 
 ```text
 fimguard/

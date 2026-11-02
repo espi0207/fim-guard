@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import tempfile
 from datetime import datetime, timezone
@@ -97,7 +98,9 @@ def load(path: Path, key: bytes) -> dict:
         raise BaselineError(f"no se pudo leer la línea base {path}: {exc}") from exc
     # compare_digest tarda lo mismo acierte o falle, así no se puede adivinar la firma
     # byte a byte midiendo tiempos. La firma se comprueba antes de mirar nada del contenido.
-    if not isinstance(signature, str) or not hmac.compare_digest(sign(payload, key), signature):
+    # (y antes, que sea una firma: compare_digest con caracteres no ASCII lanza TypeError)
+    valid_form = isinstance(signature, str) and re.fullmatch(r"[0-9a-f]{64}", signature) is not None
+    if not valid_form or not hmac.compare_digest(sign(payload, key), signature):
         raise BaselineTampered(
             "la firma HMAC de la línea base no es válida: alguien la ha modificado o la clave no es la misma"
         )

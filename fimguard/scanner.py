@@ -44,8 +44,17 @@ class ScanResult:
 
 
 def is_excluded(rel_path: str, patterns: list[str]) -> bool:
+    """Un patrón vale para la ruta o para el nombre en cualquier carpeta («*.log»). Si empieza
+    por «/», solo para esa ruta exacta desde la raíz y sin bajar a subcarpetas («/baseline.json»)."""
     name = rel_path.rsplit("/", 1)[-1]
-    return any(fnmatch.fnmatch(rel_path, p) or fnmatch.fnmatch(name, p) for p in patterns)
+    for p in patterns:
+        if p.startswith("/"):
+            anchored = p[1:]
+            if anchored.count("/") == rel_path.count("/") and fnmatch.fnmatch(rel_path, anchored):
+                return True
+        elif fnmatch.fnmatch(rel_path, p) or fnmatch.fnmatch(name, p):
+            return True
+    return False
 
 
 def _hash_file(path: Path, expected: os.stat_result) -> tuple[str, int]:
