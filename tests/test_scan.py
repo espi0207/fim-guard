@@ -249,3 +249,21 @@ def test_many_unreadable_paths_are_compared_quickly():
     for i in range(5000):
         under_unreadable_dir(f"x{i}/a/b/c.txt", errors)
     assert time.perf_counter() - start < 0.5
+
+
+def test_file_that_changes_while_hashing_is_reported_not_recorded(tmp_path, monkeypatch):
+    path = tmp_path / "a.txt"
+    path.write_text("contenido largo de antes")
+    real_fstat, calls = os.fstat, []
+
+    def changing_fstat(fd):
+        st = real_fstat(fd)
+        calls.append(1)
+        if len(calls) == 2:  # la segunda vez, ya leído: el tamaño ha cambiado
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid, 0,
+                                   st.st_atime, st.st_mtime, st.st_ctime))  # fmt: skip
+        return st
+
+    monkeypatch.setattr(sc.os, "fstat", changing_fstat)
+    with pytest.raises(OSError):
+        sc._hash_file(path, os.lstat(path))
