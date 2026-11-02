@@ -55,13 +55,33 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _auto_excludes(directory: Path, baseline_path: Path) -> list[str]:
-    """Si la línea base está dentro del directorio vigilado, se excluye a sí misma."""
-    try:
-        rel = baseline_path.resolve().relative_to(directory.resolve()).as_posix()
-    except ValueError:
+    """Si la línea base está dentro del directorio vigilado, se excluye a sí misma (y el
+    temporal con el que se guarda). Ancladas con «/» a su ruta exacta: si valieran para
+    cualquier carpeta, uploads/baseline.json o uploads/.fimguard-shell.php.tmp quedarían
+    fuera de la vigilancia, un escondite perfecto."""
+    rel = _baseline_rel(directory, baseline_path)
+    if rel is None:
         return []
+    folder = rel.rsplit("/", 1)[0] + "/" if "/" in rel else ""
     # glob.escape: un nombre como "base[1].json" se tomaría como patrón y no se excluiría.
-    return [glob.escape(rel), ".fimguard-*.tmp"]
+    return ["/" + glob.escape(rel), "/" + glob.escape(folder) + ".fimguard-*.tmp"]
+
+
+def _baseline_rel(directory: Path, baseline_path: Path) -> str | None:
+    try:
+        return baseline_path.resolve().relative_to(directory.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _tighten(excludes: list[str], directory: Path, baseline_path: Path) -> list[str]:
+    """Las líneas base de antes guardaban esas dos exclusiones sin anclar: se anclan al leerlas."""
+    rel = _baseline_rel(directory, baseline_path)
+    if rel is None:
+        return excludes
+    loose = {glob.escape(rel), ".fimguard-*.tmp"}
+    kept = [e for e in excludes if e not in loose]
+    return sorted(set(kept) | set(_auto_excludes(directory, baseline_path))) if len(kept) != len(excludes) else excludes
 
 
 def _warn(text: str) -> None:
@@ -153,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
             excludes = sorted(set(args.exclude + _auto_excludes(args.directory, args.baseline)))
         else:
             previous = bl.load(args.baseline, key)
-            excludes = previous.get("excludes", [])
+            excludes = _tighten(previous.get("excludes", []), args.directory, args.baseline)
             baseline_records = bl.records_from_payload(previous)
     except bl.BaselineTampered as exc:
         print(paint(f"ALERTA: {exc}", "bold", "bright_red", stream=sys.stderr), file=sys.stderr)
@@ -200,7 +220,9 @@ def main(argv: list[str] | None = None) -> int:
         kept = [
             p
             for p in baseline_records
-            if p not in records and (p in result.errors or under_unreadable_dir(p, result.errors))
+            # (también si ahora tiene registro: una carpeta que no se puede listar sí tiene lstat,
+            # pero no se ha podido revisar, y sus permisos nuevos no se han aceptado)
+            if p in result.errors or (p not in records and under_unreadable_dir(p, result.errors))
         ]
         for p in kept:
             records[p] = baseline_records[p]

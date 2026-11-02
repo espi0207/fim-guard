@@ -227,3 +227,43 @@ def test_unreadable_root_is_not_reported_as_removed():
     now = {".": FileRecord("dir", 0o755, 0, 0)}  # no se pudo listar la raíz
     changes = compare(before, now, {".": "Permission denied"})
     assert [(c.kind, c.path) for c in changes] == [("unreadable", ".")]
+
+
+def test_php_file_replacing_a_link_is_flagged_as_web_script():
+    from fimguard.diff import compare
+    from fimguard.scanner import FileRecord
+
+    old = {"shell.php": FileRecord(kind="symlink", mode=0o777, uid=0, gid=0, target="real.php")}
+    new = {"shell.php": FileRecord(kind="file", mode=0o644, uid=0, gid=0, size=30, sha256="ab" * 32)}
+    (change,) = compare(old, new)
+    assert change.kind == "type" and any("webshell" in s for s in change.suspicious)
+
+
+def test_many_unreadable_paths_are_compared_quickly():
+    import time
+
+    from fimguard.diff import under_unreadable_dir
+
+    errors = {f"d{i}": "permiso denegado" for i in range(5000)}
+    start = time.perf_counter()
+    for i in range(5000):
+        under_unreadable_dir(f"x{i}/a/b/c.txt", errors)
+    assert time.perf_counter() - start < 0.5
+
+
+def test_file_that_changes_while_hashing_is_reported_not_recorded(tmp_path, monkeypatch):
+    path = tmp_path / "a.txt"
+    path.write_text("contenido largo de antes")
+    real_fstat, calls = os.fstat, []
+
+    def changing_fstat(fd):
+        st = real_fstat(fd)
+        calls.append(1)
+        if len(calls) == 2:  # la segunda vez, ya leído: el tamaño ha cambiado
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, st.st_gid, 0,
+                                   st.st_atime, st.st_mtime, st.st_ctime))  # fmt: skip
+        return st
+
+    monkeypatch.setattr(sc.os, "fstat", changing_fstat)
+    with pytest.raises(OSError):
+        sc._hash_file(path, os.lstat(path))
