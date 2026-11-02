@@ -83,10 +83,12 @@ def _suspicious(old: FileRecord | None, new: FileRecord, path: str, root: str | 
     notes = sorted(_risky_bits(new) - (_risky_bits(old) if old else set()))
     if new.kind == "file" and new.mode & 0o111 and not (old and old.mode & 0o111):
         notes.append("nuevo ejecutable")
-    if old is None:
-        name = PurePosixPath(path).name
+    name = PurePosixPath(path).name
+    # Nuevo o que antes era otra cosa (un enlace, una carpeta): en los dos casos es un script que no estaba.
+    if old is None or old.kind != "file":
         if new.kind == "file" and WEB_SCRIPTS & {s.lower() for s in PurePosixPath(name).suffixes}:
             notes.append("script web nuevo (posible webshell)")
+    if old is None:
         if not name.isprintable():
             notes.append("el nombre tiene caracteres invisibles o de control (truco para esconderlo)")
     if new.kind == "symlink" and new.target and not (old and old.target == new.target):
@@ -104,8 +106,14 @@ def _describe(rec: FileRecord) -> str:
 
 
 def under_unreadable_dir(path: str, errors: dict[str, str]) -> bool:
-    """¿Está dentro de una carpeta que no se pudo leer? Si la ilegible es la raíz, lo está todo."""
-    return any(d == ROOT or path.startswith(d + "/") for d in errors)
+    """¿Está dentro de una carpeta que no se pudo leer? Si la ilegible es la raíz, lo está todo.
+
+    Se miran las carpetas de la ruta (tantas como niveles), no todos los errores: con miles
+    de rutas ilegibles, recorrerlos para cada archivo tardaba segundos."""
+    if ROOT in errors:
+        return True
+    parts = path.split("/")
+    return any("/".join(parts[:i]) in errors for i in range(1, len(parts)))
 
 
 def compare(
