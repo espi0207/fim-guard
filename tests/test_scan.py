@@ -227,3 +227,25 @@ def test_unreadable_root_is_not_reported_as_removed():
     now = {".": FileRecord("dir", 0o755, 0, 0)}  # no se pudo listar la raíz
     changes = compare(before, now, {".": "Permission denied"})
     assert [(c.kind, c.path) for c in changes] == [("unreadable", ".")]
+
+
+def test_php_file_replacing_a_link_is_flagged_as_web_script():
+    from fimguard.diff import compare
+    from fimguard.scanner import FileRecord
+
+    old = {"shell.php": FileRecord(kind="symlink", mode=0o777, uid=0, gid=0, target="real.php")}
+    new = {"shell.php": FileRecord(kind="file", mode=0o644, uid=0, gid=0, size=30, sha256="ab" * 32)}
+    (change,) = compare(old, new)
+    assert change.kind == "type" and any("webshell" in s for s in change.suspicious)
+
+
+def test_many_unreadable_paths_are_compared_quickly():
+    import time
+
+    from fimguard.diff import under_unreadable_dir
+
+    errors = {f"d{i}": "permiso denegado" for i in range(5000)}
+    start = time.perf_counter()
+    for i in range(5000):
+        under_unreadable_dir(f"x{i}/a/b/c.txt", errors)
+    assert time.perf_counter() - start < 0.5
