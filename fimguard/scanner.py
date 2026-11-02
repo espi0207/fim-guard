@@ -73,6 +73,11 @@ def _hash_file(path: Path, expected: os.stat_result) -> tuple[str, int]:
         digest = hashlib.sha256()
         while chunk := fh.read(CHUNK):
             digest.update(chunk)
+        # Si ha cambiado mientras se leía, la huella no es de ningún estado real del archivo
+        # (media versión vieja, media nueva): mejor decir que no se pudo leer que guardarla.
+        after = os.fstat(fh.fileno())
+        if (after.st_size, after.st_mtime_ns, after.st_mode) != (st.st_size, st.st_mtime_ns, st.st_mode):
+            raise OSError(errno.EAGAIN, "el archivo ha cambiado mientras se leía")
     return digest.hexdigest(), st.st_size
 
 
