@@ -291,3 +291,64 @@ def test_summary_does_not_count_the_root(site, capsys):
     root, baseline, key = site
     run("init", root, "-b", baseline, "-k", key)
     assert "3 archivos y 1 directorio" in capsys.readouterr().out
+
+
+# Fallos encontrados en la revisión con Codex
+
+
+def test_baseline_name_and_temp_pattern_are_not_hiding_places(tmp_path, capsys):
+    # La línea base dentro de la carpeta se excluye a sí misma, pero solo ella: un archivo
+    # con el mismo nombre en otra carpeta, o con forma de temporal, se tiene que ver.
+    root = tmp_path / "www"
+    (root / "uploads").mkdir(parents=True)
+    key = tmp_path / "k.key"
+    key.write_text(KEY)
+    key.chmod(0o600)
+    baseline = root / "baseline.json"
+    assert run("init", root, "-b", baseline, "-k", key) == EXIT_OK
+    (root / "uploads" / "baseline.json").write_text("<?php system($_GET['c']); ?>")
+    (root / "uploads" / ".fimguard-shell.php.tmp").write_text("<?php eval($_POST['x']); ?>")
+    capsys.readouterr()
+    assert run("check", root, "-b", baseline, "-k", key, "--json") == EXIT_CHANGES
+    paths = {c["path"] for c in json.loads(capsys.readouterr().out)}
+    assert {"uploads/baseline.json", "uploads/.fimguard-shell.php.tmp"} <= paths
+
+
+def test_old_baselines_with_loose_auto_excludes_are_tightened(tmp_path, capsys):
+    root = tmp_path / "www"
+    (root / "uploads").mkdir(parents=True)
+    key = tmp_path / "k.key"
+    key.write_text(KEY)
+    key.chmod(0o600)
+    baseline = root / "baseline.json"
+    # Así las guardaba la versión anterior: sin anclar a la raíz.
+    payload = bl.build_payload(
+        root, scan(root, ["baseline.json", ".fimguard-*.tmp"]).records, ["baseline.json", ".fimguard-*.tmp"]
+    )
+    bl.save(baseline, payload, bl.load_key(key))
+    (root / "uploads" / "baseline.json").write_text("<?php ?>")
+    capsys.readouterr()
+    assert run("check", root, "-b", baseline, "-k", key) == EXIT_CHANGES
+
+
+def test_signature_with_strange_characters_is_tampering_not_a_crash(site, capsys):
+    root, baseline, key = site
+    assert run("init", root, "-b", baseline, "-k", key) == EXIT_OK
+    document = json.loads(baseline.read_text())
+    document["hmac_sha256"] = "é"
+    baseline.write_text(json.dumps(document))
+    assert run("check", root, "-b", baseline, "-k", key) == EXIT_TAMPERED
+
+
+@posix_only
+def test_update_keeps_the_old_record_of_an_unreadable_directory(site, capsys):
+    root, baseline, key = site
+    (root / "css").chmod(0o700)
+    assert run("init", root, "-b", baseline, "-k", key) == EXIT_OK
+    (root / "css").chmod(0o333)  # cambia los permisos y además ya no se puede listar
+    try:
+        run("update", root, "-b", baseline, "-k", key)
+        records = bl.records_from_payload(bl.load(baseline, bl.load_key(key)))
+        assert oct(records["css"].mode & 0o777) == oct(0o700)
+    finally:
+        (root / "css").chmod(0o755)
