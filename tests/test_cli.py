@@ -237,10 +237,10 @@ def test_update_keeps_unreadable_entries(site, monkeypatch, capsys):
     run("init", root, "-b", baseline, "-k", key)
     real_hash = sc._hash_file
 
-    def no_permission(path, expected):
+    def no_permission(path, expected, **kw):
         if path.name == "index.html":
             raise PermissionError(13, "Permission denied")
-        return real_hash(path, expected)
+        return real_hash(path, expected, **kw)
 
     monkeypatch.setattr(sc, "_hash_file", no_permission)
     assert run("update", root, "-b", baseline, "-k", key) == EXIT_OK

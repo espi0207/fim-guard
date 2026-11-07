@@ -157,10 +157,10 @@ def test_unreadable_file_is_not_reported_as_removed(root, monkeypatch):
     before = scan(root).records
     real_hash = sc._hash_file
 
-    def no_permission(path, expected):
+    def no_permission(path, expected, **kw):
         if path.name == "index.html":
             raise PermissionError(13, "Permission denied")
-        return real_hash(path, expected)
+        return real_hash(path, expected, **kw)
 
     monkeypatch.setattr(sc, "_hash_file", no_permission)
     result = scan(root)

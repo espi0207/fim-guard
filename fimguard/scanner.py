@@ -10,6 +10,8 @@ import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .content import MAX_INSPECT, markers, should_inspect
+
 CHUNK = 1024 * 1024
 ROOT = "."  # nombre con el que se guarda la propia carpeta vigilada
 
@@ -28,12 +30,21 @@ class FileRecord:
     size: int = 0
     sha256: str | None = None  # solo archivos
     target: str | None = None  # solo enlaces simbólicos
+    # Scripts web y .htaccess: el código sospechoso que llevan dentro (ver content.py).
+    # None si no se ha mirado o no tienen nada, así las líneas base de antes siguen igual.
+    markers: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        data = {k: v for k, v in asdict(self).items() if v is not None}
+        if "markers" in data:
+            data["markers"] = list(data["markers"])
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> FileRecord:
+        data = dict(data)
+        if data.get("markers") is not None:
+            data["markers"] = tuple(data["markers"])
         return cls(**data)
 
 
@@ -57,7 +68,7 @@ def is_excluded(rel_path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _hash_file(path: Path, expected: os.stat_result) -> tuple[str, int]:
+def _hash_file(path: Path, expected: os.stat_result, inspect: bool = False) -> tuple[str, int, tuple[str, ...]]:
     """SHA-256 de un archivo regular, sin caer en trampas.
 
     Entre el lstat() y el open() alguien podría cambiar el archivo por un enlace (a
@@ -71,14 +82,17 @@ def _hash_file(path: Path, expected: os.stat_result) -> tuple[str, int]:
         if not stat.S_ISREG(st.st_mode) or (st.st_dev, st.st_ino) != (expected.st_dev, expected.st_ino):
             raise OSError(errno.EAGAIN, "el archivo ha cambiado mientras se leía")
         digest = hashlib.sha256()
+        kept: list[bytes] | None = [] if inspect and st.st_size <= MAX_INSPECT else None
         while chunk := fh.read(CHUNK):
             digest.update(chunk)
+            if kept is not None:
+                kept.append(chunk)
         # Si ha cambiado mientras se leía, la huella no es de ningún estado real del archivo
         # (media versión vieja, media nueva): mejor decir que no se pudo leer que guardarla.
         after = os.fstat(fh.fileno())
         if (after.st_size, after.st_mtime_ns, after.st_mode) != (st.st_size, st.st_mtime_ns, st.st_mode):
             raise OSError(errno.EAGAIN, "el archivo ha cambiado mientras se leía")
-    return digest.hexdigest(), st.st_size
+    return digest.hexdigest(), st.st_size, markers(b"".join(kept), path.name) if kept is not None else ()
 
 
 def _record(path: Path) -> FileRecord | None:
@@ -91,8 +105,8 @@ def _record(path: Path) -> FileRecord | None:
     if stat.S_ISDIR(st.st_mode):
         return FileRecord("dir", mode, st.st_uid, st.st_gid)
     if stat.S_ISREG(st.st_mode):
-        sha256, size = _hash_file(path, st)
-        return FileRecord("file", mode, st.st_uid, st.st_gid, size, sha256=sha256)
+        sha256, size, found = _hash_file(path, st, inspect=should_inspect(path.name))
+        return FileRecord("file", mode, st.st_uid, st.st_gid, size, sha256=sha256, markers=found or None)
     return None  # sockets, FIFOs y dispositivos no se vigilan
 
 

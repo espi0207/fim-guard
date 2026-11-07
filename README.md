@@ -106,12 +106,21 @@ Con eso se puede lanzar desde cron y avisar solo si algo no va bien:
 | Un archivo que pasa a ser ejecutable | Un script que antes no se podía ejecutar y ahora sí |
 | Enlace simbólico que apunta fuera del directorio | Un enlace a `/etc/passwd` dentro de la web puede acabar sirviéndolo |
 | Nombre con caracteres de control o invisibles | Se usan para esconder archivos (ver abajo) |
+| Código de webshell dentro de un script (`eval(base64_decode(…))`, `system($_GET[…])`, `$_REQUEST['f'](…)`, `preg_replace` con `/e`, `Runtime.exec` en JSP, `Process.Start` en ASPX), aunque el archivo ya existiera | Lo más habitual no es subir un archivo nuevo, sino meter unas líneas en un PHP que ya estaba. El hash cambia igual que con una actualización, así que se mira qué hay dentro y se avisa de lo que no estaba en la línea base |
+| Un `.htaccess`, `.user.ini` o `php.ini` que hace ejecutar imágenes o texto como PHP, o que carga un PHP antes de cada página (`auto_prepend_file`) | Así se convierte una «foto» subida en una webshell, o se mete código en todas las páginas sin tocarlas |
+| Cambios en archivos sensibles del sistema (si vigilas `/etc` o una carpeta personal): cuentas, `sudoers`, `authorized_keys`, `cron`, servicios de systemd, `ld.so.preload`, `.bashrc` y `profile.d`, `sshd_config`, PAM | Son los sitios por donde un atacante se queda en la máquina o se esconde |
 
 Si un archivo no se puede leer, sale como `ILEGIBLE` y no como eliminado: el archivo
 sigue ahí aunque no se pueda comprobar. Si lo que no se puede leer es una carpeta (o la
 propia carpeta vigilada), lo de dentro tampoco sale como eliminado. Y `update` deja lo
 ilegible como estaba en la línea base, para que un cambio hecho mientras tanto siga
 saliendo como modificado.
+
+Las marcas de código sospechoso se guardan en la línea base solo para los scripts que el
+servidor puede ejecutar y los `.htaccess`. Las líneas base de antes se siguen leyendo
+igual. Las probé con los 5.712 scripts de `/usr/share`, `/usr/lib` y XAMPP: saltan en
+tres, dos librerías PEAR antiguas que usan de verdad `preg_replace` con `/e` (ya no
+funciona desde PHP 7) y un comentario.
 
 ## Algunas decisiones
 

@@ -8,6 +8,8 @@ import stat
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from . import content
+from .content import WEB_SCRIPTS
 from .scanner import ROOT, FileRecord
 
 try:
@@ -15,14 +17,6 @@ try:
     import pwd
 except ImportError:  # Windows
     grp = pwd = None
-
-# Extensiones que un servidor web puede ejecutar. Se miran todas las del nombre porque con
-# algunas configuraciones de Apache "foto.php.jpg" se ejecuta como PHP.
-WEB_SCRIPTS = {
-    ".php", ".php3", ".php4", ".php5", ".php7", ".phtml", ".phar", ".pht",
-    ".jsp", ".jspx", ".asp", ".aspx", ".ashx", ".cgi", ".pl", ".shtml",
-}  # fmt: skip
-
 
 @dataclass
 class Change:
@@ -94,6 +88,13 @@ def _suspicious(old: FileRecord | None, new: FileRecord, path: str, root: str | 
     if new.kind == "symlink" and new.target and not (old and old.target == new.target):
         if link_escapes(path, new.target, root):
             notes.append(f"el enlace apunta fuera del directorio vigilado ({new.target})")
+    # Código sospechoso que no estaba en la línea base (en un archivo nuevo o metido en uno de antes).
+    before = set(old.markers or ()) if old and old.kind == "file" else set()
+    notes += [content.describe(m) for m in sorted(set(new.markers or ()) - before)]
+    if new.kind == "file" and (label := content.sensitive(path)):
+        content_changed = old is None or old.kind != "file" or old.sha256 != new.sha256
+        if content_changed:
+            notes.append(f"archivo sensible: {label}")
     return notes
 
 
