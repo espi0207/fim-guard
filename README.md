@@ -102,12 +102,15 @@ Con eso se puede lanzar desde cron y avisar solo si algo no va bien:
 |---|---|
 | Archivo nuevo con extensión que el servidor puede ejecutar (`.php`, `.phtml`, `.phar`, `.jsp`, `.aspx`...) | Es lo que deja un atacante que consigue subir archivos: una webshell. Se miran todas las extensiones, porque `foto.php.jpg` se ejecuta como PHP con algunas configuraciones de Apache |
 | Aparece el bit setuid o setgid | Un ejecutable setuid se ejecuta con los permisos de su dueño: es una forma clásica de escalar privilegios |
+| Un programa gana capacidades de Linux (`setcap cap_setuid+ep`) | Son trozos del poder de root: `cap_setuid` o `cap_sys_admin` valen lo mismo que un setuid de root, pero no se ven con `ls -l` |
+| Aparece un socket, una tubería (FIFO) o un dispositivo | En una carpeta de archivos no pintan nada: un socket es un programa escuchando ahí |
+| Se borra un `.htaccess`, `.user.ini`, `php.ini` o `web.config` | Si era el que no dejaba ejecutar PHP en `uploads/`, borrarlo es el primer paso para que una «foto» subida se ejecute |
 | Archivo o carpeta que pasa a ser escribible por cualquiera (también la propia carpeta vigilada, que sale como `.`) | Cualquier usuario de la máquina podría cambiarlo |
 | Un archivo que pasa a ser ejecutable | Un script que antes no se podía ejecutar y ahora sí |
 | Enlace simbólico que apunta fuera del directorio | Un enlace a `/etc/passwd` dentro de la web puede acabar sirviéndolo |
 | Nombre con caracteres de control o invisibles | Se usan para esconder archivos (ver abajo) |
-| Código de webshell dentro de un script (`eval(base64_decode(…))`, `system($_GET[…])`, `$_REQUEST['f'](…)`, `preg_replace` con `/e`, `Runtime.exec` en JSP, `Process.Start` en ASPX), aunque el archivo ya existiera | Lo más habitual no es subir un archivo nuevo, sino meter unas líneas en un PHP que ya estaba. El hash cambia igual que con una actualización, así que se mira qué hay dentro y se avisa de lo que no estaba en la línea base |
-| Un `.htaccess`, `.user.ini` o `php.ini` que hace ejecutar imágenes o texto como PHP, o que carga un PHP antes de cada página (`auto_prepend_file`) | Así se convierte una «foto» subida en una webshell, o se mete código en todas las páginas sin tocarlas |
+| Código de webshell dentro de un script (`eval(base64_decode(…))`, `system($_GET[…])`, `$_REQUEST['f'](…)`, `` `$_GET[0]` `` entre comillas invertidas, `call_user_func($_REQUEST['f'])`, `include($_GET[…])`, `eval` de `php://input`, `eval request` en ASP, `preg_replace` con `/e`, `Runtime.exec` en JSP, `Process.Start` en ASPX), aunque el archivo ya existiera | Lo más habitual no es subir un archivo nuevo, sino meter unas líneas en un PHP que ya estaba. El hash cambia igual que con una actualización, así que se mira qué hay dentro y se avisa de lo que no estaba en la línea base |
+| Un `.htaccess`, `.user.ini` o `php.ini` que hace ejecutar imágenes o texto como PHP, que carga un PHP antes de cada página (`auto_prepend_file`), que activa CGI (`AddHandler cgi-script`, `Options +ExecCGI`) o que vuelve a encender PHP donde estaba apagado (`php_flag engine on`) | Así se convierte una «foto» subida en una webshell, o se mete código en todas las páginas sin tocarlas |
 | Cambios en archivos sensibles del sistema (si vigilas `/etc` o una carpeta personal): cuentas, `sudoers`, `authorized_keys`, `cron`, servicios de systemd, `ld.so.preload`, `.bashrc` y `profile.d`, `sshd_config`, PAM | Son los sitios por donde un atacante se queda en la máquina o se esconde |
 
 Si un archivo no se puede leer, sale como `ILEGIBLE` y no como eliminado: el archivo
@@ -164,8 +167,11 @@ fimguard/
   por eso `check` enseña la fecha de la línea base.
 - Es una foto cada cierto tiempo, no vigilancia continua. Si algo se cambia y se deja
   como estaba entre dos comprobaciones, no se ve. Para eso están inotify o auditd.
-- Solo mira el contenido, los permisos y el propietario. No guarda fechas, atributos
-  extendidos ni ACLs.
+- Solo mira el contenido, los permisos, el propietario y las capacidades. No guarda
+  fechas, ACLs ni el resto de atributos extendidos.
+- Una línea base hecha con una versión anterior no tiene apuntadas las capacidades:
+  `check` lo avisa y, hasta que hagas `update`, no las compara (no puede saber si las
+  que hay son nuevas).
 
 ## Pruebas
 

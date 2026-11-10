@@ -15,8 +15,10 @@ from pathlib import PurePosixPath
 # Extensiones que un servidor web puede ejecutar. Se miran todas las del nombre porque con
 # algunas configuraciones de Apache "foto.php.jpg" se ejecuta como PHP.
 WEB_SCRIPTS = {
-    ".php", ".php3", ".php4", ".php5", ".php7", ".phtml", ".phar", ".pht",
-    ".jsp", ".jspx", ".asp", ".aspx", ".ashx", ".cgi", ".pl", ".shtml",
+    ".php", ".php3", ".php4", ".php5", ".php7", ".php8", ".phtml", ".phar", ".pht",
+    ".jsp", ".jspx", ".jspf", ".jsw", ".jsv", ".cfm", ".cfml",
+    # .asa, .cer y .cdx: IIS los ejecuta como ASP, y por eso se usan para saltarse filtros de subida
+    ".asp", ".aspx", ".ashx", ".asmx", ".ascx", ".asa", ".cer", ".cdx", ".cgi", ".pl", ".shtml",
 }  # fmt: skip
 # Archivos de configuración que cambian lo que ejecuta el servidor.
 SERVER_CONFIG = {".htaccess", ".user.ini", "php.ini"}
@@ -28,8 +30,10 @@ _REQUEST = r"\$_(?:get|post|request|cookie|server|files)"
 # marca → (expresión regular sobre el texto en minúsculas, explicación)
 MARKERS: dict[str, tuple[re.Pattern, str]] = {
     "eval-ofuscado": (
-        re.compile(r"(?:eval|assert)\s*\(\s*@?\s*(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|"
-                   r"rawurldecode|hex2bin|strrev)\s*\("),
+        re.compile(
+            r"(?:eval|assert)\s*\(\s*@?\s*(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|"
+            r"rawurldecode|hex2bin|strrev)\s*\("
+        ),
         "ejecuta código escondido (eval de base64, gzinflate o str_rot13)",
     ),
     "ejecuta-peticion": (
@@ -39,6 +43,35 @@ MARKERS: dict[str, tuple[re.Pattern, str]] = {
     "funcion-variable": (
         re.compile(_REQUEST + r"\s*\[[^\]]{0,40}\]\s*\("),
         "llama a la función que elija el visitante ($_REQUEST['f'](…))",
+    ),
+    "comillas-invertidas": (
+        # <?=`$_GET[0]`?>: en PHP, lo que va entre comillas invertidas se ejecuta en la terminal
+        re.compile(r"`[\w\s/.-]{0,30}\{?\s*" + _REQUEST + r"\b"),
+        "ejecuta en la terminal lo que llega en la petición (comillas invertidas)",
+    ),
+    "llamada-indirecta": (
+        # la función a la que se llama viene en la petición: call_user_func($_REQUEST['f'], ...)
+        re.compile(
+            r"(?:call_user_func(?:_array)?|array_map)\s*\(\s*"
+            + _REQUEST
+            + r"|(?:array_filter|array_walk|usort|uasort|uksort)\s*\([^,()]{1,60},\s*"
+            + _REQUEST
+            + r"|create_function\s*\([^)]{0,60}"
+            + _REQUEST
+        ),
+        "llama a la función que elija el visitante (call_user_func, array_map, create_function)",
+    ),
+    "incluye-peticion": (
+        re.compile(r"(?:include|require)(?:_once)?\s*\(?\s*" + _REQUEST),
+        "carga como código el archivo que diga el visitante (include($_GET[…]))",
+    ),
+    "ejecuta-cuerpo": (
+        re.compile(r"(?:eval|assert)\s*\(\s*@?\s*file_get_contents\s*\(\s*['\"]php://input"),
+        "ejecuta como código lo que se le mande (eval de php://input)",
+    ),
+    "asp-eval": (
+        re.compile(r"(?:eval|execute)\s*\(?\s*request\s*[(.]"),
+        "ejecuta lo que llega en la petición (eval request, en ASP)",
     ),
     "preg-e": (
         # el patrón entre comillas, su delimitador y unos modificadores que incluyen la e
@@ -61,13 +94,16 @@ MARKERS: dict[str, tuple[re.Pattern, str]] = {
         # que imágenes o texto se ejecuten como PHP, o un PHP que se carga antes de cada página
         re.compile(
             r"(?:addtype|addhandler)\s+\S*php\S*\s+[^\n]*\.(?:jpe?g|png|gif|ico|txt|svg|webp|bmp|css|js)\b|"
-            r"sethandler\s+\S*php|auto_(?:prepend|append)_file[ \t]*=[ \t]*[\"']?[^\s\"';]"
+            r"sethandler\s+\S*php|auto_(?:prepend|append)_file(?:[ \t]*=[ \t]*|[ \t]+)[\"']?[^\s\"';=]|"
+            # CGI donde no lo había, o volver a encender PHP en una carpeta donde estaba apagado
+            r"addhandler\s+cgi-script|options\s[^\n]*\+execcgi|php_(?:admin_)?flag\s+engine\s+(?:on|1)\b"
         ),
         "hace que imágenes o texto se ejecuten como PHP, o carga un PHP antes de cada página",
     ),
 }
 WEBSHELL = {"eval-ofuscado", "ejecuta-peticion", "funcion-variable", "preg-e", "java-exec", "dotnet-exec",
-            "blob-ofuscado"}  # fmt: skip
+            "blob-ofuscado", "comillas-invertidas", "llamada-indirecta", "incluye-peticion", "ejecuta-cuerpo",
+            "asp-eval"}  # fmt: skip
 
 
 def should_inspect(name: str) -> bool:
