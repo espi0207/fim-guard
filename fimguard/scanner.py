@@ -7,6 +7,7 @@ import fnmatch
 import hashlib
 import os
 import stat
+import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -19,6 +20,46 @@ ROOT = "."  # nombre con el que se guarda la propia carpeta vigilada
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 O_BINARY = getattr(os, "O_BINARY", 0)
+_getxattr = getattr(os, "getxattr", None)  # solo en Linux
+
+# Lo que no es archivo, carpeta ni enlace. No tienen contenido que comparar, pero que aparezca
+# uno en una carpeta de archivos es raro: un socket es un programa escuchando ahí.
+SPECIAL_KINDS = {
+    stat.S_IFIFO: "fifo",
+    stat.S_IFSOCK: "socket",
+    stat.S_IFCHR: "device",
+    stat.S_IFBLK: "device",
+}
+
+# Capacidades de Linux, por su número (linux/capability.h). Son trozos del poder de root que se
+# le pueden dar a un programa con setcap: cap_setuid o cap_sys_admin equivalen a un setuid de
+# root, pero no se ven con ls -l.
+CAPABILITIES = (
+    "chown dac_override dac_read_search fowner fsetid kill setgid setuid setpcap linux_immutable "
+    "net_bind_service net_broadcast net_admin net_raw ipc_lock ipc_owner sys_module sys_rawio sys_chroot "
+    "sys_ptrace sys_pacct sys_admin sys_boot sys_nice sys_resource sys_time sys_tty_config mknod lease "
+    "audit_write audit_control setfcap mac_override mac_admin syslog wake_alarm block_suspend audit_read "
+    "perfmon bpf checkpoint_restore"
+).split()
+
+
+def capability_names(raw: bytes) -> tuple[str, ...]:
+    """Nombres de las capacidades que da el atributo security.capability (struct vfs_cap_data)."""
+    if len(raw) < 12:
+        return ()
+    words = struct.unpack(f"<{len(raw) // 4}I", raw[: len(raw) // 4 * 4])
+    # palabra 0: versión y flags; después, pares (permitidas, heredables) de 32 bits
+    bits = words[1] | words[2] | ((words[3] | words[4]) << 32 if len(words) >= 5 else 0)
+    return tuple(f"cap_{CAPABILITIES[i]}" if i < len(CAPABILITIES) else f"cap_{i}" for i in range(64) if bits >> i & 1)
+
+
+def _capabilities(path: Path) -> tuple[str, ...] | None:
+    if _getxattr is None:
+        return None
+    try:
+        return capability_names(_getxattr(path, "security.capability", follow_symlinks=False)) or None
+    except OSError:
+        return None  # lo normal: el archivo no tiene (ENODATA) o el disco no admite atributos
 
 
 @dataclass(frozen=True)
@@ -33,18 +74,22 @@ class FileRecord:
     # Scripts web y .htaccess: el código sospechoso que llevan dentro (ver content.py).
     # None si no se ha mirado o no tienen nada, así las líneas base de antes siguen igual.
     markers: tuple[str, ...] | None = None
+    # Capacidades de Linux que tiene el archivo (setcap). None si no tiene ninguna.
+    caps: tuple[str, ...] | None = None
 
     def to_dict(self) -> dict:
         data = {k: v for k, v in asdict(self).items() if v is not None}
-        if "markers" in data:
-            data["markers"] = list(data["markers"])
+        for name in ("markers", "caps"):
+            if name in data:
+                data[name] = list(data[name])
         return data
 
     @classmethod
     def from_dict(cls, data: dict) -> FileRecord:
         data = dict(data)
-        if data.get("markers") is not None:
-            data["markers"] = tuple(data["markers"])
+        for name in ("markers", "caps"):
+            if data.get(name) is not None:
+                data[name] = tuple(data[name])
         return cls(**data)
 
 
@@ -106,8 +151,12 @@ def _record(path: Path) -> FileRecord | None:
         return FileRecord("dir", mode, st.st_uid, st.st_gid)
     if stat.S_ISREG(st.st_mode):
         sha256, size, found = _hash_file(path, st, inspect=should_inspect(path.name))
-        return FileRecord("file", mode, st.st_uid, st.st_gid, size, sha256=sha256, markers=found or None)
-    return None  # sockets, FIFOs y dispositivos no se vigilan
+        return FileRecord(
+            "file", mode, st.st_uid, st.st_gid, size, sha256=sha256, markers=found or None, caps=_capabilities(path)
+        )
+    if kind := SPECIAL_KINDS.get(stat.S_IFMT(st.st_mode)):
+        return FileRecord(kind, mode, st.st_uid, st.st_gid)
+    return None
 
 
 def scan(root: Path, excludes: list[str] | None = None) -> ScanResult:

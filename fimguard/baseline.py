@@ -20,6 +20,9 @@ from pathlib import Path
 from .scanner import FileRecord
 
 FORMAT_VERSION = 1
+# Lo que guarda esta versión y las anteriores no. Va dentro de la línea base (firmado) para no
+# dar por nuevo lo que simplemente no se apuntaba antes: "caps" son las capacidades de Linux.
+FEATURES = ["caps"]
 MIN_KEY_BYTES = 16
 
 
@@ -69,6 +72,7 @@ def build_payload(root: Path, records: dict[str, FileRecord], excludes: list[str
         "root": str(root.resolve()),
         "algorithm": "sha256",
         "excludes": excludes,
+        "features": FEATURES,
         "files": {path: rec.to_dict() for path, rec in sorted(records.items())},
     }
 

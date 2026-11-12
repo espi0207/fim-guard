@@ -208,7 +208,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"línea base creada con {_summary(result.records)} en {args.baseline}")
         return EXIT_OK
 
-    changes = compare(baseline_records, compared, result.errors, previous.get("root"))
+    # Igual con las capacidades: una línea base de antes no las apuntaba, así que no se puede
+    # saber si las que hay ahora son nuevas.
+    caps = "caps" in previous.get("features", [])
+    if not caps and args.command == "check" and any(r.caps for r in compared.values()):
+        _warn(
+            "esta línea base no vigila las capacidades de los programas (es de una versión anterior); "
+            "haz update para incluirlas"
+        )
+    changes = compare(baseline_records, compared, result.errors, previous.get("root"), caps)
 
     if args.command == "update":
         if changes:

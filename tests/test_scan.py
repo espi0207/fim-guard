@@ -201,9 +201,11 @@ def test_hash_does_not_follow_a_symlink_swapped_in(tmp_path):
 
 
 @posix_only
-def test_fifos_and_sockets_are_ignored(root):
+def test_fifos_are_recorded_without_being_opened(root):
+    # Abrir una FIFO para leerla dejaría el programa esperando para siempre: solo se apunta que está.
     os.mkfifo(root / "tuberia")
-    assert "tuberia" not in scan(root).records
+    record = scan(root).records["tuberia"]
+    assert record.kind == "fifo" and record.sha256 is None
 
 
 @posix_only

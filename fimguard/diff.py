@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
 from . import content
-from .content import WEB_SCRIPTS
+from .content import SERVER_CONFIG, WEB_SCRIPTS
 from .scanner import ROOT, FileRecord
 
 try:
@@ -17,6 +17,7 @@ try:
     import pwd
 except ImportError:  # Windows
     grp = pwd = None
+
 
 @dataclass
 class Change:
@@ -72,9 +73,24 @@ def link_escapes(link_path: str, target: str, root: str | None) -> bool:
     return resolved == ".." or resolved.startswith("../")
 
 
-def _suspicious(old: FileRecord | None, new: FileRecord, path: str, root: str | None) -> list[str]:
+SPECIAL = {"fifo": "tubería (FIFO)", "socket": "socket", "device": "dispositivo"}
+# Si desaparecen, lo que protegían deja de estarlo (un .htaccess que no dejaba ejecutar PHP en uploads/).
+PROTECTIVE = SERVER_CONFIG | {"web.config"}
+
+
+def _suspicious(old: FileRecord | None, new: FileRecord, path: str, root: str | None, caps: bool = True) -> list[str]:
     """Riesgos que aparecen con el cambio. Los que ya estaban en la línea base no se repiten."""
     notes = sorted(_risky_bits(new) - (_risky_bits(old) if old else set()))
+    if new.kind in SPECIAL and not (old and old.kind == new.kind):
+        what = "un programa escuchando ahí" if new.kind == "socket" else "no es un archivo normal"
+        notes.append(f"{SPECIAL[new.kind]} en una carpeta de archivos: {what}")
+    # En un archivo que ya estaba solo se puede decir que son nuevas si la línea base las apuntaba.
+    if caps or old is None:
+        gained = sorted(set(new.caps or ()) - set(old.caps or () if old else ()))
+        if gained:
+            notes.append(
+                f"capacidades de root que no tenía ({', '.join(gained)}): como un setuid que no se ve con ls -l"
+            )
     if new.kind == "file" and new.mode & 0o111 and not (old and old.mode & 0o111):
         notes.append("nuevo ejecutable")
     name = PurePosixPath(path).name
@@ -103,6 +119,8 @@ def _describe(rec: FileRecord) -> str:
         return f"-> {rec.target}"
     if rec.kind == "dir":
         return "directorio"
+    if rec.kind in SPECIAL:
+        return SPECIAL[rec.kind]
     return f"{rec.size} bytes"
 
 
@@ -122,13 +140,15 @@ def compare(
     current: dict[str, FileRecord],
     errors: dict[str, str] | None = None,
     root: str | None = None,
+    caps: bool = True,
 ) -> list[Change]:
     """Lista de cambios entre dos escaneos.
 
     `errors` son las rutas que no se pudieron leer en el escaneo actual: salen como
     "ilegible" y no como "eliminado", que sería mentira (el archivo sigue ahí, pero no
     se puede comprobar). `root` es el directorio original de la línea base, para saber
-    si un enlace con ruta absoluta se sale de él.
+    si un enlace con ruta absoluta se sale de él. `caps` dice si la línea base apuntaba las
+    capacidades de Linux: si no (es de una versión anterior), no se comparan.
     """
     errors = errors or {}
     changes: list[Change] = []
@@ -141,18 +161,21 @@ def compare(
         elif old is None:
             changes.append(Change("added", path, _describe(new), _suspicious(None, new, path, root)))
         elif new is None:
-            changes.append(Change("removed", path, _describe(old)))
+            gone = Change("removed", path, _describe(old))
+            if PurePosixPath(path).name.lower() in PROTECTIVE:
+                gone.suspicious = ["se ha borrado un archivo que decide qué ejecuta o deja ver el servidor web"]
+            changes.append(gone)
         elif old.kind != new.kind:
-            changes.append(Change("type", path, f"{old.kind} -> {new.kind}", _suspicious(old, new, path, root)))
+            changes.append(Change("type", path, f"{old.kind} -> {new.kind}", _suspicious(old, new, path, root, caps)))
         else:
-            change = _compare_same_kind(old, new, path)
+            change = _compare_same_kind(old, new, path, caps)
             if change:
-                change.suspicious = _suspicious(old, new, path, root)
+                change.suspicious = _suspicious(old, new, path, root, caps)
                 changes.append(change)
     return changes
 
 
-def _compare_same_kind(old: FileRecord, new: FileRecord, path: str) -> Change | None:
+def _compare_same_kind(old: FileRecord, new: FileRecord, path: str, caps: bool = True) -> Change | None:
     parts = []
     kind = None
     if old.sha256 != new.sha256:
@@ -163,6 +186,11 @@ def _compare_same_kind(old: FileRecord, new: FileRecord, path: str) -> Change | 
         kind = "modified"
     if old.mode != new.mode:
         parts.append(f"permisos {old.mode:04o} -> {new.mode:04o}")
+        kind = kind or "permissions"
+    if caps and old.caps != new.caps:
+        parts.append(
+            f"capacidades {', '.join(old.caps or ()) or 'ninguna'} -> {', '.join(new.caps or ()) or 'ninguna'}"
+        )
         kind = kind or "permissions"
     if (old.uid, old.gid) != (new.uid, new.gid):
         parts.append(f"propietario {owner_name(old.uid, old.gid)} -> {owner_name(new.uid, new.gid)}")
